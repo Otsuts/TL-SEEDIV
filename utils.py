@@ -1,18 +1,13 @@
 import os
-import time
 import torch
 import numpy as np
 import random
-import argparse
-import torch.nn.functional as func
-
 from sklearn.manifold import TSNE
 from sklearn.preprocessing import StandardScaler
-from tllib.utils.metric import accuracy, ConfusionMatrix
-from tllib.utils.data import ForeverDataIterator
-from tllib.utils.meter import AverageMeter, ProgressMeter
 from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
+
+from tllib.utils.metric import accuracy
 
 
 def tsne_visualize(data, labels, title='scatter'):
@@ -71,116 +66,76 @@ def preprocess_data(train_data, train_labels, test_data, test_labels, device):
     train_data = train_data.unsqueeze(1)
     test_data = test_data.unsqueeze(1)
 
-    return train_data.to(device), train_labels.to(device), test_data.to(device), test_labels.to(device)
+    return train_data, train_labels, test_data, test_labels
 
 
 # Training function
-def train_model(train_source_iter: ForeverDataIterator, train_target_iter: ForeverDataIterator,
-                model, domain_adv, optimizer, lr_scheduler, epoch, device, args: argparse.Namespace):
-    batch_time = AverageMeter('Time', ':5.2f')
-    data_time = AverageMeter('Data', ':5.2f')
-    losses = AverageMeter('Loss', ':6.2f')
-    cls_accs = AverageMeter('Cls Acc', ':3.1f')
-    domain_accs = AverageMeter('Domain Acc', ':3.1f')
-    progress = ProgressMeter(
-        args.iters_per_epoch,
-        [batch_time, data_time, losses, cls_accs, domain_accs],
-        prefix="Epoch: [{}]".format(epoch))
-
-    # switch to train mode
+def train_model(model, source_iter, target_iter, num_iter,
+                criterion, domain_adv, optimizer, device):
     model.train()
-    domain_adv.train()
 
-    end = time.time()
-    for i in range(args.iters_per_epoch):
-        x_s, labels_s = next(train_source_iter)[:2]
-        x_t, = next(train_target_iter)[:1]
+    cls_acs = []
+    domain_acs = []
+    running_loss = []
+    transfer_loss = []
+
+    for i in range(num_iter):
+        x_s, label_s = next(source_iter)[:2]
+        x_t = next(target_iter)[:1][0]
 
         x_s = x_s.to(device)
         x_t = x_t.to(device)
-        labels_s = labels_s.to(device)
+        label_s = label_s.to(device)
 
-        # measure data loading time
-        data_time.update(time.time() - end)
-
-        # compute output
-        x = torch.cat((x_s, x_t), dim=0)
-        y, f = model(x)
-        y_s, y_t = y.chunk(2, dim=0)
-        f_s, f_t = f.chunk(2, dim=0)
-
-        cls_loss = func.cross_entropy(y_s, labels_s)
-        transfer_loss = domain_adv(f_s, f_t)
-        domain_acc = domain_adv.domain_discriminator_accuracy
-        loss = cls_loss + transfer_loss * args.trade_off
-
-        cls_acc = accuracy(y_s, labels_s)[0]
-
-        losses.update(loss.item(), x_s.size(0))
-        cls_accs.update(cls_acc.item(), x_s.size(0))
-        domain_accs.update(domain_acc.item(), x_s.size(0))
-
-        # compute gradient and do Adam step
         optimizer.zero_grad()
+
+        y_s, f_s = model(x_s)
+        y_t, f_t = model(x_t)
+
+        cls_loss = criterion(y_s, label_s)
+        tf_loss = domain_adv(f_s, f_t)
+        loss = cls_loss + 2*tf_loss
         loss.backward()
         optimizer.step()
-        lr_scheduler.step()
 
-        # measure elapsed time
-        batch_time.update(time.time() - end)
-        end = time.time()
+        running_loss.append(loss.item())
+        transfer_loss.append(tf_loss.item())
+        cls_acc = accuracy(y_s, label_s)[0].item()
+        domain_acc = domain_adv.domain_discriminator_accuracy.item()
+        cls_acs.append(cls_acc)
+        domain_acs.append(domain_acc)
 
-        if i % args.print_freq == 0:
-            progress.display(i)
+    cls_acc = np.mean(cls_acs)
+    domain_acc = np.mean(domain_acs)
+    running_loss = np.mean(running_loss)
+    transfer_loss = np.mean(transfer_loss)
+    return running_loss, transfer_loss, cls_acc, domain_acc
 
 
 # Testing function
-def validate(val_loader, model, args, device) -> float:
-    batch_time = AverageMeter('Time', ':6.3f')
-    losses = AverageMeter('Loss', ':.4e')
-    top1 = AverageMeter('Acc@1', ':6.2f')
-    progress = ProgressMeter(
-        len(val_loader),
-        [batch_time, losses, top1],
-        prefix='Test: ')
-
-    # switch to evaluate mode
+def test_model(model, test_loader, criterion, device):
     model.eval()
-    if args.per_class_eval:
-        confmat = ConfusionMatrix(len(args.class_names))
-    else:
-        confmat = None
+    test_loss = 0
+    correct = 0
+    total = 0
+    predicted_labels = []  # Add this line to store the predicted labels
 
     with torch.no_grad():
-        end = time.time()
-        for i, data in enumerate(val_loader):
-            images, target = data[:2]
-            images = images.to(device)
-            target = target.to(device)
+        for inputs, targets in test_loader:
+            inputs, targets = inputs.to(device), targets.to(device)
+            outputs = model(inputs)
+            loss = criterion(outputs, targets)
 
-            # compute output
-            output = model(images)
-            loss = func.cross_entropy(output, target)
+            test_loss += loss.item()
+            _, predicted = outputs.max(1)
+            total += targets.size(0)
+            correct += predicted.eq(targets).sum().item()
 
-            # measure accuracy and record loss
-            acc1, = accuracy(output, target, topk=(1,))
-            if confmat:
-                confmat.update(target, output.argmax(1))
-            losses.update(loss.item(), images.size(0))
-            top1.update(acc1.item(), images.size(0))
+            # Append the predicted labels to the list
+            predicted_labels.extend(predicted.cpu().numpy())
 
-            # measure elapsed time
-            batch_time.update(time.time() - end)
-            end = time.time()
-
-            if i % args.print_freq == 0:
-                progress.display(i)
-
-        print(' * Acc@1 {top1.avg:.3f}'.format(top1=top1))
-        if confmat:
-            print(confmat.format(args.class_names))
-
-    return top1.avg
+    test_acc = 100 * correct / total
+    return test_loss / len(test_loader), test_acc, predicted_labels  # Return the predicted_labels
 
 
 # 读取数据集和标签
@@ -207,6 +162,34 @@ def data_flow(path):
         full_test_data.append(lab_test_data)
     data = [full_train_data, full_test_data]
     return data
+
+
+def get_low_bound(num, batch_size):
+    num = num // batch_size
+    return num * batch_size
+
+
+# 生成被试依存的数据（3*15 = 45）
+def depend_sub(data):
+    depend_data = np.zeros((3, 15), dtype=list)
+    full_train = data[0]
+    full_test = data[1]
+    scaler = StandardScaler()
+
+    for ses in range(3):
+        ses_train_data = np.concatenate([full_train[ses][sub][0] for sub in range(15)], axis=0)
+        ses_test_data = np.concatenate([full_test[ses][sub][0] for sub in range(15)], axis=0)
+        ses_data = np.concatenate([ses_train_data, ses_test_data])
+        scaler.fit(ses_data)
+
+        for sub in range(15):
+            train_data = scaler.transform(full_train[ses][sub][0])
+            train_label = full_train[ses][sub][1]
+            test_data = scaler.transform(full_test[ses][sub][0])
+            test_label = full_test[ses][sub][1]
+            depend_data[ses][sub] = [train_data, train_label, test_data, test_label]
+
+    return depend_data
 
 
 # 生成被试独立的数据（15）
@@ -243,15 +226,14 @@ def across_sub(data):
         test_data = np.concatenate([sub_data[i] for i in test_sub], axis=0)
         test_labels = np.concatenate([sub_labels[i] for i in test_sub], axis=0)
 
-        # sampling
         n_samples = train_data.shape[0]
-        n_train_samples = 2560  # int(n_samples * 0.1)
+        n_train_samples = get_low_bound(int(n_samples * 0.1), int(512*1.25))
         train_indices = random.sample(range(n_samples), n_train_samples)
         train_data = train_data[train_indices]
         train_labels = train_labels[train_indices]
 
         n_samples = test_data.shape[0]
-        n_test_samples = 2048   # int(n_samples * 0.5)
+        n_test_samples = get_low_bound(int(n_samples), 512)
         test_indices = random.sample(range(n_samples), n_test_samples)
         test_data = test_data[test_indices]
         test_labels = test_labels[test_indices]

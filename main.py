@@ -1,117 +1,149 @@
+import optparse
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
-
-import models
-from utils import *
 from sklearn.model_selection import train_test_split
-from tllib.modules.domain_discriminator import DomainDiscriminator
-from tllib.alignment.dann import DomainAdversarialLoss
-from tllib.modules.classifier import Classifier
-from tllib.utils.data import ForeverDataIterator
+from tqdm import tqdm
+from utils import *
+from models import *
+from parameter import *
+
 from tllib.utils.logger import CompleteLogger
+from tllib.utils.data import ForeverDataIterator
+from tllib.alignment.dann import DomainAdversarialLoss
+from tllib.modules.domain_discriminator import DomainDiscriminator
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+def setup_seed(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
 
 
-def main(args: argparse.Namespace):
-    # 创建日志记录器
+def parse_options():
+    opt_parser = optparse.OptionParser()
+    opt_parser.add_option('--log', action='store', type='string', dest='log', default='logs')
+    opt_parser.add_option('--phase', action='store', type='string', dest='phase', default='train')
+    opt_parser.add_option('-m', '--mode', action='store', type='string', dest='mode', default='across',
+                          help='dependent or across')
+    opt_parser.add_option('-l', '--learning_rate', action='store', type='float', dest='lr', default=LEARNING_RATE)
+    opt_parser.add_option('-b', '--batch_size', action='store', type='int', dest='bz', default=BATCH_SIZE)
+    opt_parser.add_option('-e', '--epoch', action='store', type='int', dest='epoch', default=NUM_EPOCH)
+    opt_parser.add_option('-w', '--weight_decay', action='store', type='float', dest='wd', default=WEIGHT_DECAY)
+    opt_parser.add_option('-p', '--patience', action='store', type='int', dest='pat', default=PATIENCE)
+    opts, _ = opt_parser.parse_args()
+    return opts
+
+
+if __name__ == '__main__':
+    args = parse_options()
+    setup_seed(233)
+
+    # 定义网络参数
+    DEPENDENT_NUM = 45
+    ACROSS_NUM = 15
+    results = []
+    test_mode = args.mode
+    learning_rate = args.lr
+    batch_size = args.bz
+    weight_decay = args.wd
+    num_epoch = args.epoch
+    patience = args.pat
+
+    # Set device
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logger = CompleteLogger(args.log, args.phase)
-
-    # 1. 数据加载
-    # 根据您的数据集进行数据处理和加载
     full_data = data_flow('SEED-IV')
-    across_data = across_sub(full_data)
-    acc_list = []
-    for sub in range(15):
-        train_data, train_labels, test_data, test_labels = across_data[sub]
+
+    if test_mode == 'dependent':
+        data_set = depend_sub(full_data)
+        num_model = DEPENDENT_NUM
+
+    else:
+        data_set = across_sub(full_data)
+        num_model = ACROSS_NUM
+
+    for num in range(num_model):
+        if test_mode == 'dependent':
+            train_data, train_labels, test_data, test_labels = data_set[num // 15][num % 15]
+        else:
+            train_data, train_labels, test_data, test_labels = data_set[num]
+
+        # 获取数据并预处理
+        raw_test_labels = test_labels
         train_data, train_labels, test_data, test_labels = \
             preprocess_data(train_data, train_labels, test_data, test_labels, device)
+
+        # 创建模型，优化器
+        # model = EEG_CNN(num_classes=4).to(device)
+        model = CNN1d().to(device)
+        adapter = DomainDiscriminator(in_feature=model.features_dim, hidden_size=128).to(device)
+        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.Adam([{'params': model.parameters()}, {'params': adapter.parameters(), 'lr': 5e-4}]
+                               , lr=learning_rate, weight_decay=weight_decay)
+        domain_adv = DomainAdversarialLoss(adapter).to(device)
 
         # Split Valid DataSets
         train_data, val_data, train_labels, val_labels = train_test_split(train_data, train_labels,
                                                                           test_size=0.2, random_state=42)
 
+        # Create Test DataLoaders
         train_dataset = TensorDataset(train_data, train_labels)
         val_dataset = TensorDataset(val_data, val_labels)
         test_dataset = TensorDataset(test_data, test_labels)
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-        train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-        val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
-        test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
+        num_iter = len(train_dataset) // batch_size
+        source_iter = ForeverDataIterator(train_loader)
+        target_iter = ForeverDataIterator(test_loader)
 
-        train_source_iter = ForeverDataIterator(train_loader)
-        train_target_iter = ForeverDataIterator(test_loader)
+        cls_acc, domain_acc, train_loss = 0, 0, 0
+        val_acc, val_loss = 0, 0
 
-        # 2. 创建模型
-        # 根据任务选择合适的特征提取网络
-        classifier = models.CNN1d().to(device)
-        domain_discri = DomainDiscriminator(in_feature=classifier.features_dim, hidden_size=1024).to(device)
+        # Train the model
+        min_val_loss = float('inf')
+        count = 0
+        best_acc = 0
+        tf_losses = []
+        tol_losses = []
 
-        # 3. 定义损失函数和优化器
-        optimizer = optim.Adam(classifier.get_parameters() + domain_discri.get_parameters()
-                               , lr=args.lr, weight_decay=args.weight_decay)
+        for epoch in tqdm(range(num_epoch)):
+            # Train in train dataset
+            train_loss, tf_loss, cls_acc, domain_acc = train_model(model, source_iter, target_iter,
+                                                                   num_iter, criterion, domain_adv, optimizer, device)
+            tf_losses.append(tf_loss)
+            tol_losses.append(train_loss)
+            # Evaluate in valid dataset
+            if (epoch + 1) % 2 == 0:
+                val_loss, val_acc, _ = test_model(model, val_loader, criterion, device)
+                best_acc = max(val_acc, best_acc)
+                if val_loss < min_val_loss:
+                    count = 0
+                    min_val_loss = val_loss
+                    torch.save(model.state_dict(), logger.get_checkpoint_path('best'))
+                    torch.save(adapter.state_dict(), logger.get_checkpoint_path('adapt'))
+                else:
+                    count += 1
+                    if count >= patience:
+                        break
 
-        lr_scheduler = optim.lr_scheduler.LambdaLR(optimizer,
-                                                   lambda x: args.lr * (1. + args.lr_gamma * float(x)) ** (
-                                                       -args.lr_decay))
-        domain_adv = DomainAdversarialLoss(domain_discri).to(device)
+        tqdm.write(f'In train No. {num}, Cls Acc: {cls_acc:.4f}%, Domain Acc: {domain_acc:.4f}%, '
+                   f'loss: {np.mean(tf_losses):.4f}, {np.mean(tol_losses):.4f}, Val Acc: {val_acc:.4f}%')
 
-        # 4. 训练和评估
-        # 请根据您的情况编写train_model()和validate()函数
-        best_acc1 = 0.
-        for epoch in range(args.epochs):
-            # 训练一个epoch
-            train_model(train_source_iter, train_target_iter,
-                        classifier, domain_adv, optimizer, lr_scheduler, epoch, device, args)
+        # Evaluate the model
+        model.load_state_dict(torch.load(logger.get_checkpoint_path('best')))
+        adapter.load_state_dict(torch.load(logger.get_checkpoint_path('adapt')))
+        test_loss, test_acc, label_pred = test_model(model, test_loader, criterion, device)
+        # tsne_3d_visualize(test_data.view(test_data.shape[0], -1), label_pred, 'CNN Prediction Labels')
+        # tsne_3d_visualize(test_data.view(test_data.shape[0], -1), raw_test_labels, 'Real Labels')
+        tqdm.write(f'The accuracy in test {num} is {test_acc:.4f}%, the loss is {test_loss:.4f}')
+        results.append(test_acc)
 
-            # 在验证集上评估
-            acc1 = validate(val_loader, classifier, args, device)
-
-            # 更新最佳准确率
-            if acc1 > best_acc1:
-                best_acc1 = acc1
-                torch.save(classifier.state_dict(), logger.get_checkpoint_path('best'))
-
-        # 5. 测试
-        classifier.load_state_dict(torch.load(logger.get_checkpoint_path('best')))
-        test_acc1 = validate(test_loader, classifier, args, device)
-        acc_list.append(test_acc1)
-        print("For sub {}, test_acc = {:3.1f}".format(sub, test_acc1))
-
-    print(f'The average acc is {np.mean(acc_list)}')
-    logger.close()
+    # Calculate the average accuracy for subject-dependent condition
+    accuracy = np.mean(results)
+    print(f"Subject-dependent accuracy: {accuracy:.2f}%")
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='DANN for Unsupervised Domain Adaptation')
-    # model parameters
-    parser.add_argument('--trade-off', default=1., type=float,
-                        help='the trade-off hyper-parameter for transfer loss')
-    # training parameters
-    parser.add_argument('-b', '--batch-size', default=32, type=int,
-                        metavar='N',
-                        help='mini-batch size (default: 32)')
-    parser.add_argument('--lr', '--learning-rate', default=0.01, type=float,
-                        metavar='LR', help='initial learning rate', dest='lr')
-    parser.add_argument('--lr-gamma', default=0.001, type=float, help='parameter for lr scheduler')
-    parser.add_argument('--lr-decay', default=0.75, type=float, help='parameter for lr scheduler')
-    parser.add_argument('--wd', '--weight-decay', default=1e-3, type=float,
-                        metavar='W', help='weight decay (default: 1e-3)',
-                        dest='weight_decay')
-    parser.add_argument('-j', '--workers', default=2, type=int, metavar='N',
-                        help='number of data loading workers (default: 2)')
-    parser.add_argument('--epochs', default=20, type=int, metavar='N',
-                        help='number of total epochs to run')
-    parser.add_argument('-i', '--iters-per-epoch', default=1000, type=int,
-                        help='Number of iterations per epoch')
-    parser.add_argument('-p', '--print-freq', default=100, type=int,
-                        metavar='N', help='print frequency (default: 100)')
-    parser.add_argument('--per-class-eval', action='store_true',
-                        help='whether output per-class accuracy during evaluation')
-    parser.add_argument("--log", type=str, default='dann',
-                        help="Where to save logs, checkpoints and debugging images.")
-    parser.add_argument("--phase", type=str, default='train', choices=['train', 'test', 'analysis'],
-                        help="When phase is 'test', only test the model."
-                             "When phase is 'analysis', only analysis the model.")
-    args = parser.parse_args()
-    main(args)
+
