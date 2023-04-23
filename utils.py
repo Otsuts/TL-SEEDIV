@@ -58,10 +58,10 @@ def import_forder(test_num, path='./SEED-IV', scale=True):
 
 
 def write_log(w, args):
-    file_name = args.log_path + '/' + datetime.date.today().strftime('%m%d') + \
+    file_name = args.log_path + '/'+args.model+'/' + datetime.date.today().strftime('%m%d') + \
         f"_LR{args.learning_rate}_BS{args.batch_size}_WD{args.weight_decay}.log"
-    if not os.path.exists(args.log_path + '/'):
-        os.mkdir(args.log_path + '/')
+    if not os.path.exists(args.log_path + '/'+args.model+'/'):
+        os.mkdir(args.log_path + '/'+args.model+'/')
     t0 = datetime.datetime.now().strftime('%H:%M:%S')
     info = "{} : {}".format(t0, w)
     print(info)
