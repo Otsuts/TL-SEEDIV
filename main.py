@@ -13,31 +13,39 @@ from tllib.alignment.dann import DomainAdversarialLoss
 from tllib.modules.domain_discriminator import DomainDiscriminator
 
 
-def setup_seed(seed):
+def set_seed(seed=42):
+    random.seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    np.random.seed(seed)
-    random.seed(seed)
 
 
 def parse_options():
     opt_parser = optparse.OptionParser()
-    opt_parser.add_option('--log', action='store', type='string', dest='log', default='logs')
-    opt_parser.add_option('--phase', action='store', type='string', dest='phase', default='train')
+    opt_parser.add_option('--log', action='store',
+                          type='string', dest='log', default='logs')
+    opt_parser.add_option('--phase', action='store',
+                          type='string', dest='phase', default='train')
     opt_parser.add_option('-m', '--mode', action='store', type='string', dest='mode', default='across',
                           help='dependent or across')
-    opt_parser.add_option('-l', '--learning_rate', action='store', type='float', dest='lr', default=LEARNING_RATE)
-    opt_parser.add_option('-b', '--batch_size', action='store', type='int', dest='bz', default=BATCH_SIZE)
-    opt_parser.add_option('-e', '--epoch', action='store', type='int', dest='epoch', default=NUM_EPOCH)
-    opt_parser.add_option('-w', '--weight_decay', action='store', type='float', dest='wd', default=WEIGHT_DECAY)
-    opt_parser.add_option('-p', '--patience', action='store', type='int', dest='pat', default=PATIENCE)
+    opt_parser.add_option('-l', '--learning_rate', action='store',
+                          type='float', dest='lr', default=LEARNING_RATE)
+    opt_parser.add_option('-b', '--batch_size', action='store',
+                          type='int', dest='bz', default=BATCH_SIZE)
+    opt_parser.add_option('-e', '--epoch', action='store',
+                          type='int', dest='epoch', default=NUM_EPOCH)
+    opt_parser.add_option('-w', '--weight_decay', action='store',
+                          type='float', dest='wd', default=WEIGHT_DECAY)
+    opt_parser.add_option('-p', '--patience', action='store',
+                          type='int', dest='pat', default=PATIENCE)
     opts, _ = opt_parser.parse_args()
     return opts
 
 
 if __name__ == '__main__':
     args = parse_options()
-    setup_seed(233)
+    set_seed(233)
 
     # 定义网络参数
     DEPENDENT_NUM = 45
@@ -72,15 +80,17 @@ if __name__ == '__main__':
         # 获取数据并预处理
         raw_test_labels = test_labels
         train_data, train_labels, test_data, test_labels = \
-            preprocess_data(train_data, train_labels, test_data, test_labels, device)
+            preprocess_data(train_data, train_labels,
+                            test_data, test_labels, device)
 
         # 创建模型，优化器
-        # model = EEG_CNN(num_classes=4).to(device)
-        model = CNN1d().to(device)
-        adapter = DomainDiscriminator(in_feature=model.features_dim, hidden_size=128).to(device)
+        model = EEG_CNN(num_classes=4).to(device)
+        #model = CNN1d().to(device)
+        adapter = DomainDiscriminator(
+            in_feature=model.features_dim, hidden_size=128).to(device)
         criterion = nn.CrossEntropyLoss()
-        optimizer = optim.Adam([{'params': model.parameters()}, {'params': adapter.parameters(), 'lr': 5e-4}]
-                               , lr=learning_rate, weight_decay=weight_decay)
+        optimizer = optim.Adam([{'params': model.parameters()}, {'params': adapter.parameters(
+        ), 'lr': 5e-4}], lr=learning_rate, weight_decay=weight_decay)
         domain_adv = DomainAdversarialLoss(adapter).to(device)
 
         # Split Valid DataSets
@@ -91,9 +101,12 @@ if __name__ == '__main__':
         train_dataset = TensorDataset(train_data, train_labels)
         val_dataset = TensorDataset(val_data, val_labels)
         test_dataset = TensorDataset(test_data, test_labels)
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+        train_loader = DataLoader(
+            train_dataset, batch_size=batch_size, shuffle=True)
+        val_loader = DataLoader(
+            val_dataset, batch_size=batch_size, shuffle=False)
+        test_loader = DataLoader(
+            test_dataset, batch_size=batch_size, shuffle=False)
 
         num_iter = len(train_dataset) // batch_size
         source_iter = ForeverDataIterator(train_loader)
@@ -117,13 +130,16 @@ if __name__ == '__main__':
             tol_losses.append(train_loss)
             # Evaluate in valid dataset
             if (epoch + 1) % 2 == 0:
-                val_loss, val_acc, _ = test_model(model, val_loader, criterion, device)
+                val_loss, val_acc, _ = test_model(
+                    model, val_loader, criterion, device)
                 best_acc = max(val_acc, best_acc)
                 if val_loss < min_val_loss:
                     count = 0
                     min_val_loss = val_loss
-                    torch.save(model.state_dict(), logger.get_checkpoint_path('best'))
-                    torch.save(adapter.state_dict(), logger.get_checkpoint_path('adapt'))
+                    torch.save(model.state_dict(),
+                               logger.get_checkpoint_path('best'))
+                    torch.save(adapter.state_dict(),
+                               logger.get_checkpoint_path('adapt'))
                 else:
                     count += 1
                     if count >= patience:
@@ -134,16 +150,16 @@ if __name__ == '__main__':
 
         # Evaluate the model
         model.load_state_dict(torch.load(logger.get_checkpoint_path('best')))
-        adapter.load_state_dict(torch.load(logger.get_checkpoint_path('adapt')))
-        test_loss, test_acc, label_pred = test_model(model, test_loader, criterion, device)
+        adapter.load_state_dict(torch.load(
+            logger.get_checkpoint_path('adapt')))
+        test_loss, test_acc, label_pred = test_model(
+            model, test_loader, criterion, device)
         # tsne_3d_visualize(test_data.view(test_data.shape[0], -1), label_pred, 'CNN Prediction Labels')
         # tsne_3d_visualize(test_data.view(test_data.shape[0], -1), raw_test_labels, 'Real Labels')
-        tqdm.write(f'The accuracy in test {num} is {test_acc:.4f}%, the loss is {test_loss:.4f}')
+        tqdm.write(
+            f'The accuracy in test {num} is {test_acc:.4f}%, the loss is {test_loss:.4f}')
         results.append(test_acc)
 
     # Calculate the average accuracy for subject-dependent condition
     accuracy = np.mean(results)
     print(f"Subject-dependent accuracy: {accuracy:.2f}%")
-
-
-

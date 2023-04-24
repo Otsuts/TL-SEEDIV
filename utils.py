@@ -69,6 +69,83 @@ def preprocess_data(train_data, train_labels, test_data, test_labels, device):
     return train_data, train_labels, test_data, test_labels
 
 
+def train_adda(source_model, target_model, source_iter, target_iter, num_iter, criterion, domain_adv, optimizer,
+               device):
+    target_model.train()
+    source_model.train()
+    domain_adv.train()
+
+    cls_acs = []
+    domain_acs = []
+    running_loss = []
+    transfer_loss = []
+
+    for i in range(num_iter):
+        x_s, label_s = next(source_iter)[:2]
+        x_t = next(target_iter)[:1][0]
+
+        x_s = x_s.to(device)
+        x_t = x_t.to(device)
+        label_s = label_s.to(device)
+
+        optimizer.zero_grad()
+        with torch.no_grad():
+            y_s, f_s = source_model(x_s)
+        y_t, f_t = target_model(x_t)
+        cls_loss = criterion(y_s, label_s)
+        loss_transfer = domain_adv(f_s, f_t)
+        optimizer.zero_grad()
+        loss_transfer.backward()
+        optimizer.step()
+
+        running_loss.append(cls_loss.item())
+        transfer_loss.append(loss_transfer.item())
+        cls_acc = accuracy(y_s, label_s)[0].item()
+        domain_acc = domain_adv.domain_discriminator_accuracy.item()
+        cls_acs.append(cls_acc)
+        domain_acs.append(domain_acc)
+
+    cls_acc = np.mean(cls_acs)
+    domain_acc = np.mean(domain_acs)
+    running_loss = np.mean(running_loss)
+    transfer_loss = np.mean(transfer_loss)
+    return running_loss, transfer_loss, cls_acc, domain_acc
+
+
+def pretrain_one_epoch(model, source_iter, target_loader, num_iter,
+                       criterion, optimizer, device):
+    '''
+    pretrain model using training set and val set in source domain
+    '''
+    model.train()
+    for i in range(num_iter):
+        x_train, y_train = next(source_iter)[:2]
+        x_train = x_train.to(device)
+        y_train = y_train.to(device)
+        optimizer.zero_grad()
+        y_pred, _ = model(x_train)
+        loss = criterion(y_pred, y_train)
+        loss.backward()
+        optimizer.step()
+    # 现在在验证集上验证准确率
+    with torch.no_grad():
+        model.eval()
+        test_loss = 0.0
+        total = 0
+        correct = 0
+        for inputs, targets in target_loader:
+            inputs, targets = inputs.to(device), targets.to(device)
+            outputs = model(inputs)
+            loss = criterion(outputs, targets)
+
+            test_loss += loss.item()
+            _, predicted = outputs.max(1)
+            total += targets.size(0)
+            correct += predicted.eq(targets).sum().item()
+
+    return 100 * correct / total
+
+
 # Training function
 def train_model(model, source_iter, target_iter, num_iter,
                 criterion, domain_adv, optimizer, device):
@@ -94,7 +171,7 @@ def train_model(model, source_iter, target_iter, num_iter,
 
         cls_loss = criterion(y_s, label_s)
         tf_loss = domain_adv(f_s, f_t)
-        loss = cls_loss + 2*tf_loss
+        loss = cls_loss + 2 * tf_loss
         loss.backward()
         optimizer.step()
 
@@ -227,7 +304,7 @@ def across_sub(data):
         test_labels = np.concatenate([sub_labels[i] for i in test_sub], axis=0)
 
         n_samples = train_data.shape[0]
-        n_train_samples = get_low_bound(int(n_samples * 0.1), int(512*1.25))
+        n_train_samples = get_low_bound(int(n_samples * 0.1), int(512 * 1.25))
         train_indices = random.sample(range(n_samples), n_train_samples)
         train_data = train_data[train_indices]
         train_labels = train_labels[train_indices]
