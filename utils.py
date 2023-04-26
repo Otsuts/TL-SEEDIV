@@ -9,6 +9,8 @@ from torch.utils.data import TensorDataset, ConcatDataset, Sampler
 from sklearn.model_selection import train_test_split
 from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
+import higher
+from torch.nn import functional
 
 from tllib.utils.metric import accuracy
 
@@ -485,3 +487,55 @@ class RandomDomainSampler(Sampler):
 
     def __len__(self):
         return self.length
+
+def random_split(x_list, labels_list, n_domains_per_batch, n_support_domains):
+    assert n_support_domains < n_domains_per_batch
+
+    support_domain_idxes = random.sample(range(n_domains_per_batch), n_support_domains)
+    support_domain_list = [(x_list[idx], labels_list[idx]) for idx in range(n_domains_per_batch) if
+                           idx in support_domain_idxes]
+    query_domain_list = [(x_list[idx], labels_list[idx]) for idx in range(n_domains_per_batch) if
+                         idx not in support_domain_idxes]
+
+    return support_domain_list, query_domain_list
+
+def train(train_iter, model, optimizer, n_domains, n_support, n_query, n_iter, n_inner_iter, trade_off, device):
+    cls_accs = []
+    losses = []
+
+    model.train()
+
+    for i in range(n_iter):
+        x, labels, _ = next(train_iter)
+        x = x.to(device)
+        labels = labels.to(device)
+
+        x_list = x.chunk(n_domains, dim=0)
+        labels_list = labels.chunk(n_domains, dim=0)
+        support_list, query_list = random_split(x_list, labels_list, n_domains, n_support)
+
+        optimizer.zero_grad()
+
+        with higher.innerloop_ctx(model, optimizer, copy_initial_weights=False) as (inner_model, inner_optimizer):
+            for _ in range(n_inner_iter):
+                loss_inner = 0
+                for (x_s, labels_s) in support_list:
+                    y_s, _ = inner_model(x_s.float())
+                    loss_inner += functional.cross_entropy(y_s, labels_s.long()) / n_support
+
+                inner_optimizer.step(loss_inner)
+
+            loss_outer = 0
+            cls_acc = 0
+
+            for (x_s, labels_s) in support_list:
+                y_s, _ = model(x_s.float())
+                loss_outer += functional.cross_entropy(y_s, labels_s.long()) / n_support
+
+            for (x_q, labels_q) in query_list:
+                y_q, _ = model(x_q.float())
+                loss_outer += functional.cross_entropy(y_q, labels_q.long()) * trade_off / n_query
+                cls_acc += accuracy(y_q, labels_q)[0] / n_query
+
+        loss_outer.backward()
+        optimizer.step()
