@@ -2,8 +2,11 @@ import os
 import torch
 import numpy as np
 import random
+import copy
 from sklearn.manifold import TSNE
 from sklearn.preprocessing import StandardScaler
+from torch.utils.data import TensorDataset, ConcatDataset, Sampler
+from sklearn.model_selection import train_test_split
 from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
 
@@ -147,6 +150,48 @@ def pretrain_one_epoch(model, source_iter, target_loader, num_iter,
 
 
 # Training function
+
+def train_plain(model, source_iter, target_iter, num_iter,
+                criterion, domain_adv, optimizer, device):
+    model.train()
+
+    cls_acs = []
+    domain_acs = []
+    running_loss = []
+    transfer_loss = []
+
+    for i in range(num_iter):
+        x_s, label_s = next(source_iter)[:2]
+        x_t = next(target_iter)[:1][0]
+
+        x_s = x_s.to(device)
+        x_t = x_t.to(device)
+        label_s = label_s.to(device)
+
+        optimizer.zero_grad()
+
+        y_s, f_s = model(x_s.float())
+        y_t, f_t = model(x_t.float())
+        cls_loss = criterion(y_s, label_s.long())
+        tf_loss = 0
+        loss = cls_loss
+        loss.backward()
+        optimizer.step()
+
+        running_loss.append(loss.item())
+        transfer_loss.append(tf_loss)
+        cls_acc = accuracy(y_s, label_s)[0].item()
+        domain_acc = 0
+        cls_acs.append(cls_acc)
+        domain_acs.append(domain_acc)
+
+    cls_acc = np.mean(cls_acs)
+    domain_acc = np.mean(domain_acs)
+    running_loss = np.mean(running_loss)
+    transfer_loss = np.mean(transfer_loss)
+    return running_loss, transfer_loss, cls_acc, domain_acc
+
+
 def train_model(model, source_iter, target_iter, num_iter,
                 criterion, domain_adv, optimizer, device):
     model.train()
@@ -200,8 +245,8 @@ def test_model(model, test_loader, criterion, device):
     with torch.no_grad():
         for inputs, targets in test_loader:
             inputs, targets = inputs.to(device), targets.to(device)
-            outputs = model(inputs)
-            loss = criterion(outputs, targets)
+            outputs = model(inputs.float())
+            loss = criterion(outputs, targets.long())
 
             test_loss += loss.item()
             _, predicted = outputs.max(1)
@@ -318,3 +363,125 @@ def across_sub(data):
         across_data[sub] = [train_data, train_labels, test_data, test_labels]
 
     return across_data
+
+
+def get_labeled_dataset(data):
+    across_data = np.zeros(15, dtype=list)
+    full_train_data = data[0]
+    full_test_data = data[1]
+    sub_data = []
+    sub_labels = []
+
+    scaler = StandardScaler()
+    for i in range(15):
+        ses_data = []
+        ses_labels = []
+        for j in range(3):
+            ses_dat = np.concatenate([full_train_data[j][i][0], full_test_data[j][i][0]])
+            ses_label = np.concatenate([full_train_data[j][i][1], full_test_data[j][i][1]])
+            scaler.fit(ses_dat)
+            ses_dat = scaler.transform(ses_dat)
+            ses_data.append(ses_dat)
+            ses_labels.append(ses_label)
+
+        sub_dat = np.concatenate(ses_data, axis=0)
+        sub_label = np.concatenate(ses_labels, axis=0)
+
+        sub_data.append(sub_dat)
+        sub_labels.append(sub_label)
+
+    train_labeled_dataset = []
+    test_labeled_dataset = None
+    val_labeled_dataset = []
+    for sub in range(15):
+        for i in range(15):
+            if i != sub:
+                train_dataset = TensorDataset(torch.tensor(sub_data[i]), torch.tensor(sub_labels[i]))
+                train_dataset, val_dataset = train_test_split(train_dataset, test_size=0.2, random_state=42)
+                train_labeled_dataset.append(train_dataset)
+                val_labeled_dataset.append(val_dataset)
+            else:
+                test_labeled_dataset = TensorDataset(torch.tensor(sub_data[i]), torch.tensor(sub_labels[i]))
+        across_data[sub] = [ConcatDatasetWithDomainLabel(train_labeled_dataset),
+                            ConcatDataset(val_labeled_dataset), test_labeled_dataset]
+        train_labeled_dataset = []
+        val_labeled_dataset = []
+        test_labeled_dataset = None
+
+    return across_data
+
+
+class ConcatDatasetWithDomainLabel(ConcatDataset):
+    """ConcatDataset with domain label"""
+
+    def __init__(self, *args, **kwargs):
+        super(ConcatDatasetWithDomainLabel, self).__init__(*args, **kwargs)
+        self.index_to_domain_id = {}
+        domain_id = 0
+        start = 0
+        for end in self.cumulative_sizes:
+            for idx in range(start, end):
+                self.index_to_domain_id[idx] = domain_id
+            start = end
+            domain_id += 1
+
+    def __getitem__(self, index):
+        img, target = super(ConcatDatasetWithDomainLabel, self).__getitem__(index)
+        domain_id = self.index_to_domain_id[index]
+        return img, target, domain_id
+
+
+class RandomDomainSampler(Sampler):
+    r"""Randomly sample :math:`N` domains, then randomly select :math:`K` samples in each domain to form a mini-batch of
+    size :math:`N\times K`.
+    Args:
+        data_source (ConcatDataset): dataset that contains data from multiple domains
+        batch_size (int): mini-batch size (:math:`N\times K` here)
+        n_domains_per_batch (int): number of domains to select in a single mini-batch (:math:`N` here)
+    """
+
+    def __init__(self, data_source: ConcatDataset, batch_size: int, n_domains_per_batch: int):
+        super(Sampler, self).__init__()
+        self.n_domains_in_dataset = len(data_source.cumulative_sizes)
+        self.n_domains_per_batch = n_domains_per_batch
+        assert self.n_domains_in_dataset >= self.n_domains_per_batch
+
+        self.sample_idxes_per_domain = []
+        start = 0
+        for end in data_source.cumulative_sizes:
+            idxes = [idx for idx in range(start, end)]
+            self.sample_idxes_per_domain.append(idxes)
+            start = end
+
+        assert batch_size % n_domains_per_batch == 0
+        self.batch_size_per_domain = batch_size // n_domains_per_batch
+        self.length = len(list(self.__iter__()))
+
+    def __iter__(self):
+        sample_idxes_per_domain = copy.deepcopy(self.sample_idxes_per_domain)
+        domain_idxes = [idx for idx in range(self.n_domains_in_dataset)]
+        final_idxes = []
+        stop_flag = False
+        while not stop_flag:
+            selected_domains = random.sample(domain_idxes, self.n_domains_per_batch)
+
+            for domain in selected_domains:
+                sample_idxes = sample_idxes_per_domain[domain]
+                if len(sample_idxes) < self.batch_size_per_domain:
+                    selected_idxes = np.random.choice(sample_idxes, self.batch_size_per_domain, replace=True)
+                else:
+                    selected_idxes = random.sample(sample_idxes, self.batch_size_per_domain)
+                final_idxes.extend(selected_idxes)
+
+                for idx in selected_idxes:
+                    if idx in sample_idxes_per_domain[domain]:
+                        sample_idxes_per_domain[domain].remove(idx)
+
+                remaining_size = len(sample_idxes_per_domain[domain])
+                if remaining_size < self.batch_size_per_domain:
+                    stop_flag = True
+
+        return iter(final_idxes)
+
+    def __len__(self):
+        return self.length
