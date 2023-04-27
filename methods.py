@@ -104,6 +104,45 @@ class TrainBase:
         return losses / len(loader), acc, predicted_labels
 
 
+class BaseLine(TrainBase):
+    def __init__(self, args, dataset, sub, logger):
+        super(BaseLine, self).__init__(args, dataset, sub, logger)
+        self.train_loader = DataLoader(self.train_dataset, batch_size=self.bz, shuffle=True)
+        self.val_loader = DataLoader(self.val_dataset, batch_size=self.bz, shuffle=False)
+        self.test_loader = DataLoader(self.test_dataset, batch_size=self.bz, shuffle=False)
+
+        self.num_iter = len(self.train_dataset) // self.bz
+        self.train_iter = ForeverDataIterator(self.train_loader)
+        self.criterion = nn.CrossEntropyLoss()
+        self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr, weight_decay=self.wd)
+
+    def train_model(self):
+        self.model.train()
+        cls_acs = []
+        running_loss = []
+
+        for i in range(self.num_iter):
+            x_s, label_s = next(self.train_iter)[:2]
+            x_s, label_s = x_s.to(self.device), label_s.to(self.device)
+
+            self.optimizer.zero_grad()
+
+            y_s, _ = self.model(x_s)
+
+            cls_loss = self.criterion(y_s, label_s)
+            loss = cls_loss
+            loss.backward()
+            self.optimizer.step()
+
+            running_loss.append(loss.item())
+            cls_acc = accuracy(y_s, label_s)[0].item()
+            cls_acs.append(cls_acc)
+
+        cls_acc = np.mean(cls_acs)
+        running_loss = np.mean(running_loss)
+        return running_loss, cls_acc, 0
+
+
 class DANN(TrainBase):
     def __init__(self, args, dataset, sub, logger):
         super(DANN, self).__init__(args, dataset, sub, logger)
@@ -333,9 +372,9 @@ class MixStyle(TrainBase):
 class MLDG(TrainBase):
     def __init__(self, args, dataset, sub, logger):
         super(MLDG, self).__init__(args, dataset, sub, logger)
-        self.n_support = 4
-        self.n_query = 4
-        self.n_domain = self.n_support + self.n_query
+        self.n_support = args.num_support
+        self.n_domain = args.num_domain
+        self.n_query = self.n_domain - self.n_support
         self.inner_iter = 2
         sampler = RandomDomainSampler(self.train_dataset, self.bz, self.n_domain)
         self.train_loader = DataLoader(self.train_dataset, batch_size=self.bz, sampler=sampler, drop_last=True)

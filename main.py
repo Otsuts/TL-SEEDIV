@@ -1,10 +1,22 @@
+import yaml
 import argparse
 from utils import *
 from models import *
 from parameters import *
-from methods import DANN, ADDA, MixStyle, MLDG
+from methods import BaseLine, DANN, ADDA, MixStyle, MLDG
 
+from types import SimpleNamespace
 from tllib.utils.logger import CompleteLogger
+
+
+def load_config(path):
+    with open(path, 'r') as f:
+        conf = yaml.safe_load(f)
+    return conf
+
+
+def dict_to_namespace(d):
+    return SimpleNamespace(**d)
 
 
 def setup_seed(seed):
@@ -16,11 +28,9 @@ def setup_seed(seed):
 
 def parse_options():
     opt_parser = argparse.ArgumentParser()
-    opt_parser.add_argument('--model', type=str, default='dann')
+    opt_parser.add_argument('--model', type=str, default='mldg')
     opt_parser.add_argument('--log', action='store', type=str, dest='log', default='logs')
     opt_parser.add_argument('--phase', action='store', type=str, dest='phase', default='train')
-    opt_parser.add_argument('-m', '--mode', action='store', type=str, dest='mode', default='across',
-                            help='dependent or across')
     opt_parser.add_argument('-l', '--learn_rate', action='store', type=str, dest='learn_rate', default=LEARNING_RATE)
     opt_parser.add_argument('-b', '--batch_size', action='store', type=str, dest='batch_size', default=BATCH_SIZE)
     opt_parser.add_argument('-e', '--num_epoch', action='store', type=str, dest='num_epoch', default=NUM_EPOCH)
@@ -30,12 +40,18 @@ def parse_options():
     opt_parser.add_argument('-t', '--trade_off', action='store', type=str, dest='trade_off', default=2)
     opt_parser.add_argument('--pretrain_epoch', type=str, default=100)
     opt_parser.add_argument('--pretrain_lr', type=float, default=5e-4)
+    opt_parser.add_argument('--num_support', type=str, default=100)
+    opt_parser.add_argument('--num_domain', type=float, default=5e-4)
     opts = opt_parser.parse_args()
     return opts
 
 
 if __name__ == '__main__':
+    config_path = 'config.yaml'
+    config = load_config(config_path)
+
     args = parse_options()
+    args = dict_to_namespace(config[args.model])
     setup_seed(233)
 
     # 定义网络参数
@@ -46,18 +62,20 @@ if __name__ == '__main__':
     num_model = 15
 
     for sub in range(num_model):
-        if args.model == 'dann' or args.model == 'adda':
-            dataset = get_dataset(sub_data, sub_labels, sub)
-        else:
+        if args.model == 'mixstyle' or args.model == 'mldg':
             dataset = get_labeled_dataset(sub_data, sub_labels, sub)
+        else:
+            dataset = get_dataset(sub_data, sub_labels, sub)
         if args.model == 'dann':
             worker = DANN(args, dataset, sub, logger)
         elif args.model == 'adda':
             worker = ADDA(args, dataset, sub, logger)
         elif args.model == 'mixstyle':
+            worker = MixStyle(args, dataset, sub, logger)
+        elif args.model == 'mldg':
             worker = MLDG(args, dataset, sub, logger)
         else:
-            raise f'Model {args.model} not supported'
+            worker = BaseLine(args, dataset, sub, logger)
         test_acc = worker.work()
         results.append(test_acc)
 

@@ -1,0 +1,63 @@
+# config.yaml
+baseline:
+  learn_rate: 0.0005
+  batch_size: 512
+  num_epoch: 250
+  weight_decay: 0.00001
+  patience: 3
+  log: logs
+  phase: baseline
+  model: baseline
+  num_class: 4
+
+dann:
+  learn_rate: 0.0001
+  batch_size: 512
+  num_epoch: 250
+  weight_decay: 0.00001
+  patience: 3
+  trade_off: 2
+  log: logs
+  phase: dann
+  model: dann
+  num_class: 4
+
+adda:
+  learn_rate: 0.0005
+  batch_size: 512
+  num_epoch: 250
+  weight_decay: 0.00001
+  patience: 10
+  trade_off: 2
+  pretrain_epoch: 100
+  pretrain_lr: 0.0005
+  log: logs
+  phase: adda
+  model: adda
+  num_class: 4
+
+mixstyle:
+  learn_rate: 0.0005
+  batch_size: 512
+  num_epoch: 250
+  trade_off: 2
+  weight_decay: 0.00001
+  patience: 3
+  log: logs
+  phase: mixstyle
+  model: mixstyle
+  num_class: 4
+
+mldg:
+  learn_rate: 0.0005
+  batch_size: 512
+  num_epoch: 250
+  trade_off: 2
+  weight_decay: 0.00001
+  patience: 3
+  num_support: 2
+  num_domain: 4
+  log: logs
+  phase: mldg
+  model: mldg
+  num_class: 4
