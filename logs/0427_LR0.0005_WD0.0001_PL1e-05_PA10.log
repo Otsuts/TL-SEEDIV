@@ -1,0 +1,32 @@
+13:37:57 : Namespace(model='dann', log='logs', phase='train', learn_rate=0.0005, batch_size=512, num_epoch=250, weight_decay=0.0001, patience=10, num_class=4, trade_off=2, pretrain_epoch=100, pretrain_lr=1e-05, num_support=2, num_domain=4)
+13:38:09 : In train No. 0, Cls Acc: 98.6133%, Domain Acc: 46.7676%, loss: 2.1846, Val Acc: 98.2812%
+13:38:09 : The accuracy in test 0 is 75.7324%, the loss is 0.9873
+13:38:14 : In train No. 1, Cls Acc: 97.9688%, Domain Acc: 49.8145%, loss: 2.2107, Val Acc: 96.7188%
+13:38:14 : The accuracy in test 1 is 65.8691%, the loss is 1.0871
+13:38:19 : In train No. 2, Cls Acc: 98.9648%, Domain Acc: 51.0254%, loss: 2.1940, Val Acc: 98.3594%
+13:38:19 : The accuracy in test 2 is 54.5898%, the loss is 1.1829
+13:38:25 : In train No. 3, Cls Acc: 97.4414%, Domain Acc: 49.8926%, loss: 2.2089, Val Acc: 97.1094%
+13:38:25 : The accuracy in test 3 is 82.1777%, the loss is 0.9227
+13:38:32 : In train No. 4, Cls Acc: 98.9062%, Domain Acc: 50.4590%, loss: 2.1889, Val Acc: 98.0469%
+13:38:32 : The accuracy in test 4 is 69.7754%, the loss is 1.0460
+13:38:39 : In train No. 5, Cls Acc: 98.5352%, Domain Acc: 51.5137%, loss: 2.1928, Val Acc: 97.8906%
+13:38:39 : The accuracy in test 5 is 67.7246%, the loss is 1.0644
+13:38:47 : In train No. 6, Cls Acc: 98.9258%, Domain Acc: 48.2812%, loss: 2.1873, Val Acc: 98.1250%
+13:38:47 : The accuracy in test 6 is 77.8809%, the loss is 0.9647
+13:38:53 : In train No. 7, Cls Acc: 98.7891%, Domain Acc: 48.4863%, loss: 2.1917, Val Acc: 98.9062%
+13:38:53 : The accuracy in test 7 is 64.7461%, the loss is 1.0940
+13:39:03 : In train No. 8, Cls Acc: 99.1797%, Domain Acc: 49.3652%, loss: 2.1832, Val Acc: 99.1406%
+13:39:03 : The accuracy in test 8 is 66.6504%, the loss is 1.0749
+13:39:11 : In train No. 9, Cls Acc: 98.4961%, Domain Acc: 47.9980%, loss: 2.1915, Val Acc: 97.6562%
+13:39:11 : The accuracy in test 9 is 72.0215%, the loss is 1.0233
+13:39:20 : In train No. 10, Cls Acc: 98.1445%, Domain Acc: 50.5371%, loss: 2.1884, Val Acc: 98.2812%
+13:39:20 : The accuracy in test 10 is 64.5508%, the loss is 1.0982
+13:39:26 : In train No. 11, Cls Acc: 98.8086%, Domain Acc: 49.8535%, loss: 2.1980, Val Acc: 98.2031%
+13:39:26 : The accuracy in test 11 is 64.5996%, the loss is 1.1032
+13:39:32 : In train No. 12, Cls Acc: 98.6914%, Domain Acc: 50.2637%, loss: 2.1967, Val Acc: 97.6562%
+13:39:32 : The accuracy in test 12 is 72.8027%, the loss is 1.0117
+13:39:39 : In train No. 13, Cls Acc: 98.2812%, Domain Acc: 48.9844%, loss: 2.1996, Val Acc: 98.0469%
+13:39:39 : The accuracy in test 13 is 66.8457%, the loss is 1.0711
+13:39:45 : In train No. 14, Cls Acc: 99.0430%, Domain Acc: 50.9473%, loss: 2.2019, Val Acc: 98.6719%
+13:39:45 : The accuracy in test 14 is 57.6172%, the loss is 1.1674
+13:39:45 : Subject-dependent accuracy: 68.24%
